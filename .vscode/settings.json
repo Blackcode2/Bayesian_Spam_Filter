@@ -5,6 +5,7 @@
     "locale": "cpp",
     "ostream": "cpp",
     "map": "cpp",
-    "xstring": "cpp"
+    "xstring": "cpp",
+    "string": "cpp"
   }
 }

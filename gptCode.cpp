@@ -131,6 +131,7 @@ public:
             totalEmails++;
         }
         file.close();
+        
 
         return (double)correctPredictions / totalEmails * 100.0;
     }
