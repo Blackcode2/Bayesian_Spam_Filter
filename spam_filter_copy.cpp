@@ -7,20 +7,26 @@
 #include <map>
 #include <cmath>
 #include <algorithm>
+#include <set>
 
 using namespace std;
+
+const double epsilon = 1e-9;
 
 class SpamFilter
 {
 private:
-    const string fileName;
     map<string, int> spamWordCount;
     map<string, int> hamWordCount;
-    int totalSpamWords;
-    int totalHamWords;
+    map<string, double> wordSpamP; // P(word|spam)
+    map<string, double> wordSpamQ;
+    map<string, double> wordHamP;  // P(word|ham)
+    map<string, double> wordHamQ; 
+    int totalSpamWords = 0;
+    int totalHamWords = 0;
     double spamPrior;
     double hamPrior;
-    vector<string> emails;
+    set<string> vocabulary;
 
     ifstream openFile(const string fileName)
     {
@@ -32,52 +38,6 @@ private:
             exit(1);
         }
         return file;
-    }
-
-    string preprocessString(const string &text)
-    {
-        string processedText;
-        bool isText = false;
-        bool isFirstLine = false;
-        if (text.find("\"Subject") != string::npos)
-        {
-            isFirstLine = true;
-        }
-        // cout << "f text: " << text << endl;
-        for (char character : text)
-        {
-
-            if (isFirstLine)
-            {
-                if (character == '"')
-                {
-                    isText = true;
-                }
-                if (isText)
-                {
-                    if (isalnum(character))
-                    {
-                        processedText += tolower(character);
-                    }
-                    else if (isspace(character))
-                    {
-                        processedText += ' ';
-                    }
-                }
-            }
-            else
-            {
-                if (isalnum(character))
-                {
-                    processedText += tolower(character);
-                }
-                else if (isspace(character))
-                {
-                    processedText += ' ';
-                }
-            }
-        }
-        return processedText;
     }
 
     vector<string> splitByWord(const string &text)
@@ -92,37 +52,39 @@ private:
         return words;
     }
 
-    double calcaulateProbability(const string &email) {
-    vector<string> words = splitByWord(email);
-
-    double spamScore = log(spamPrior);
-    double hamScore = log(hamPrior);
-
-    for (const string &word : words) {
-        double p_word_spam = (spamWordCount[word] + 1.0) / (totalSpamWords + spamWordCount.size());
-        double p_word_ham = (hamWordCount[word] + 1.0) / (totalHamWords + hamWordCount.size());
-
-        // Logarithmic addition to prevent underflow
-        spamScore += log(p_word_spam);
-        hamScore += log(p_word_ham);
-
-        // Debug intermediate probabilities
-        cout << "Word: " << word << ", P(word|spam): " << p_word_spam << ", P(word|ham): " << p_word_ham << endl;
+    void calculateProbabilities()
+    {
+        int vocabSize = vocabulary.size();
+        for (const auto &word : vocabulary)
+        {
+            wordSpamP[word] = (spamWordCount[word] + 1.0) / (totalSpamWords + vocabSize);
+            wordHamP[word] = (hamWordCount[word] + 1.0) / (totalHamWords + vocabSize);
+        }
     }
 
-    // Log-sum-exp trick for stability
-    double maxScore = max(spamScore, hamScore);
-    double denominator = log(exp(spamScore - maxScore) + exp(hamScore - maxScore)) + maxScore;
-    return exp(spamScore - denominator);
-}
+    string preprocess(const string &text)
+    {
+        string processedText;
+        for (char character : text)
+        {
+            if (isalnum(character))
+            {
+                processedText += tolower(character);
+            }
+            else if (isspace(character))
+            {
+                processedText += ' ';
+            }
+        }
+        return processedText;
+    }
 
-  
-
-    void openTestFile(const string &fileName)
+    vector<string> extractEmail(const string &fileName)
     {
         ifstream file = openFile(fileName);
         string line;
         string email;
+        vector<string> emails;
         bool isText = false;
 
         while (getline(file, line))
@@ -164,48 +126,149 @@ private:
         {
             emails.push_back(email);
         }
+
+        file.close();
+
+        vector<string> porcessedEmails;
+        for (auto iter = emails.begin(); iter != emails.end(); iter++)
+        {
+            porcessedEmails.push_back(preprocess(*iter));
+        }
+
+        return porcessedEmails;
+    }
+
+    // void classifyEmail(const string fileName, bool isSpam)
+    // {
+
+    //     vector<double> thresholds = {0.6, 0.7, 0.8, 0.9, 0.95};
+    //     int index = 1;
+
+    //     vector<string> emails = extractEmail(fileName);
+    //     cout << "\nindex |  label  |  probability  | 0.6\t| 0.7\t| 0.8\t| 0.9\t| 0.95" << endl;
+    //     for (string email : emails)
+    //     {
+    //         double spamScore = 1.0;
+    //         double hamScore = 1.0;
+    //         vector<string> words = splitByWord(email);
+
+    //         for (string word : words)
+    //         {
+    //             double temp = wordSpamP.count(word) ? wordSpamP[word] : 1.0 / (totalSpamWords + vocabulary.size()); 
+    //             spamScore *= temp;
+    //             hamScore *= (1-temp);
+    //             // hamScore *= wordHamP.count(word) ? wordHamP[word] : 1.0 / (totalHamWords + vocabulary.size());
+    //         }
+
+    //         // Normalize scores to probabilities
+            
+    //         double probSpam = spamScore / (spamScore + hamScore);
+
+    //         vector<string> tLabel;
+    //         for (double t : thresholds)
+    //         {
+    //             string label = probSpam >= t ? "Spam" : "Ham";
+    //             tLabel.push_back(label);
+    //         }
+    //         cout.width(6);
+    //         cout << std::left << index;
+    //         cout.width(4);
+    //         cout << std::left << "| " << (isSpam ? "Spam\t| " : "Ham\t| ");
+    //         cout.width(13);
+    //         cout << std::left << probSpam << "\t| " << tLabel[0] << "\t| " << tLabel[1] << "\t| " << tLabel[2] << "\t| " << tLabel[3] << "\t| " << tLabel[4] << endl;
+    //         index++;
+    //     }
+    // }
+
+    void classifyEmail(const string fileName, bool isSpam)
+    {
+        
+        vector<double> thresholds = {0.6, 0.7, 0.8, 0.9, 0.95};
+        int index = 1;
+
+        vector<string> emails = extractEmail(fileName);
+        cout << "\nindex |  label  |  probability  | 0.6\t| 0.7\t| 0.8\t| 0.9\t| 0.95" << endl;
+        for (string email : emails)
+        {
+            double spamScore = log(spamPrior);
+        double hamScore = log(hamPrior);
+        vector<string> words = splitByWord(email);
+
+        for (string word : words)
+        {
+            if (vocabulary.count(word)) 
+            {
+                spamScore += log(wordSpamP[word] + epsilon);
+                hamScore += log(wordHamP[word] + epsilon);
+            } 
+            else 
+            {
+                double unseenProbSpam = 1.0 / (totalSpamWords + vocabulary.size());
+                double unseenProbHam = 1.0 / (totalHamWords + vocabulary.size());
+                spamScore += log(unseenProbSpam + epsilon);
+                hamScore += log(unseenProbHam + epsilon);
+            }
+        }
+
+        // Normalize probabilities using the log-sum-exp trick
+        double maxScore = max(spamScore, hamScore);
+        double probSpam = exp(spamScore - maxScore) / (exp(spamScore - maxScore) + exp(hamScore - maxScore));
+
+            // double probSpam = spamScore / (spamScore + hamScore);
+
+            vector<string> tLabel;
+            for (double t : thresholds)
+            {
+                string label = probSpam >= t ? "Spam" : "Ham";
+                tLabel.push_back(label);
+            }
+            cout.width(6);
+            cout << std::left << index;
+            cout.width(4);
+            cout << std::left << "| " << (isSpam ? "Spam\t| " : "Ham\t| ");
+            cout.width(13);
+            cout << std::left << probSpam << "\t| " << tLabel[0] << "\t| " << tLabel[1] << "\t| " << tLabel[2] << "\t| " << tLabel[3] << "\t| " << tLabel[4] << endl;
+            index++;
+        }
     }
 
 public:
     void train(const string fileName, bool isSpam)
     {
-        ifstream file = openFile(fileName);
-        string line;
-        int i = 0;
-        // line += " ";
-        while (getline(file, line))
+        vector<string> emails = extractEmail(fileName);
+
+        // DEBUG
+        //     int i = 1;
+        //     for(auto iter = emails.begin(); iter != emails.end(); iter++){
+        //         cout<< i << " email: " << *iter << endl;
+        //         i++;
+        // }
+
+        for (string email : emails)
         {
-            if (i == 0)
-            {
-                i++;
-                continue;
-            }
-
-            string preprocessed = preprocessString(line);
-            vector<string> words = splitByWord(preprocessed);
-
-            // DEBUG
-            // cout << "text: " << preprocessed << endl;
-            // if (i == 20)
-            // {
-            //     break;
-            // }
-
+            vector<string> words = splitByWord(email);
             for (string word : words)
             {
                 if (isSpam)
                 {
                     spamWordCount[word] += 1;
                     totalSpamWords += 1;
+                    vocabulary.insert(word);
                 }
                 else
                 {
                     hamWordCount[word] += 1;
                     totalHamWords += 1;
+                    vocabulary.insert(word);
                 }
             }
         }
-        file.close();
+    }
+
+    void trainAll(const string &spamFile, const string &hamFile)
+    {
+        train(spamFile, true);
+        train(hamFile, false);
     }
 
     void setPriors(int spamEmails, int hamEmails)
@@ -214,43 +277,9 @@ public:
         hamPrior = (double)hamEmails / (spamEmails + hamEmails);
     }
 
-    void printEmail()
-    {
-        int i = 1;
-        for (auto iter = emails.begin(); iter != emails.end(); iter++)
-        {
-            cout << i << "email: " << *iter << endl;
-            cout << *iter << endl;
-            cout << "======= end ======" << endl;
-            i++;
-        }
-    }
-
     void evaluate(const string fileName, bool isSpam)
     {
-        int index = 1;
-        vector<double> thresholds = {0.6, 0.7, 0.8, 0.9, 0.95};
-        emails.clear();
-
-        openTestFile(fileName);
-        cout << "\nindex |  label  |  probability  | 0.6\t| 0.7\t| 0.8\t| 0.9\t| 0.95" << endl;
-        for (string email : emails)
-        {
-            double probability = calcaulateProbability(email);
-            vector<string> tLabel;
-            // for (double t : thresholds)
-            // {
-            //     string label = probability >= t ? "Spam" : "Ham";
-            //     tLabel.push_back(label);
-            // }
-            // cout.width(6);
-            // cout << std::left << index;
-            // cout.width(4);
-            // cout << std::left << "| " << (isSpam ? "Spam\t| " : "Ham\t| ");
-            // cout.width(13);
-            // cout << std::left << probability << "\t| " << tLabel[0] << "\t| " << tLabel[1] << "\t| " << tLabel[2] << "\t| " << tLabel[3] << "\t| " << tLabel[4] << endl;
-            // index++;
-        }
+        classifyEmail(fileName, isSpam);
     }
 };
 
@@ -265,14 +294,11 @@ int main()
     SpamFilter filter;
 
     // Train on provided data
-    filter.train(trainSpam, true);
-    filter.train(trainHam, false);
+    filter.trainAll(trainSpam, trainHam);
+    // filter.printWord();
 
     // // Set priors based on training data
-    filter.setPriors(20, 20);
-
-    // filter.openTestFile(testHam);
-    // filter.printEmail();
+    filter.setPriors(100, 100);
 
     filter.evaluate(testSpam, true);
     filter.evaluate(testHam, false);

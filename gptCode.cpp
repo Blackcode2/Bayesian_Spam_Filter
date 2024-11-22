@@ -2,217 +2,168 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <map>
-#include <sstream>
 #include <cmath>
-#include <iomanip>
+#include <cctype>
+#include <cstring>
+#include <sstream>
+#include <algorithm>
 
 using namespace std;
 
-class SpamFilter
-{
-private:
-    map<string, int> spamWordCount;
-    map<string, int> hamWordCount;
-    int totalSpamWords = 0;
-    int totalHamWords = 0;
-    double spamPrior = 0.0;
-    double hamPrior = 0.0;
+const string train_ham = "dataset_ham_train100.csv";
+const string train_spam = "dataset_spam_train100.csv";
+const string test_ham = "dataset_ham_test20.csv";
+const string test_spam = "dataset_spam_test20.csv";
 
-    string preprocessString(const string &text)
-    {
-        string processed;
-        for (char c : text)
-        {
-            if (isalnum(c) || isspace(c))
-            {
-                processed += tolower(c);
+class SpamFilter {
+private:
+    vector<string> stopwords = {"a", "about", "above", "after", "again", "against", /*...*/ "yourself", "yourselves"};
+    vector<string> singleLetters = {"q", "w", "e", "r", "t", "y", "u", "i", "o", "p", /*...*/ "m"};
+
+    struct Data {
+        vector<string> words;
+        int length = 0;
+        int real_length = 0;
+        double ham_probability = 0.0;
+        double spam_probability = 0.0;
+        double probability = 0.0;
+    };
+
+    vector<Data> testHamData, testSpamData, trainHamData, trainSpamData;
+
+    // Convert a string to lowercase
+    string toLowerCase(const string &s) {
+        string result;
+        transform(s.begin(), s.end(), back_inserter(result), ::tolower);
+        return result;
+    }
+
+    // Check if a word is unnecessary
+    bool isUnnecessaryWord(const string &word) {
+        if (find(stopwords.begin(), stopwords.end(), word) != stopwords.end() ||
+            find(singleLetters.begin(), singleLetters.end(), word) != singleLetters.end() ||
+            word == "ham" || word == "spam") {
+            return true;
+        }
+        return false;
+    }
+
+    // Tokenize a line into words
+    vector<string> tokenize(const string &line) {
+        vector<string> words;
+        stringstream ss(line);
+        string word;
+        while (ss >> word) {
+            words.push_back(toLowerCase(word));
+        }
+        return words;
+    }
+
+    // Parse a file into data
+    void parseFile(const string &filename, vector<Data> &data, int recordCount) {
+        ifstream file(filename);
+        if (!file.is_open()) {
+            cerr << "Error opening file: " << filename << endl;
+            exit(EXIT_FAILURE);
+        }
+
+        string line;
+        int index = 0;
+        while (getline(file, line) && index < recordCount) {
+            vector<string> words = tokenize(line);
+            Data record;
+            for (auto &word : words) {
+                if (!isUnnecessaryWord(word)) {
+                    record.words.push_back(word);
+                }
+            }
+            record.length = record.words.size();
+            data.push_back(record);
+            index++;
+        }
+        file.close();
+    }
+
+    // Remove duplicate words in each record and update real_length
+    void removeDuplicateWords(vector<Data> &data) {
+        for (auto &record : data) {
+            sort(record.words.begin(), record.words.end());
+            record.words.erase(unique(record.words.begin(), record.words.end()), record.words.end());
+            record.real_length = record.words.size();
+        }
+    }
+
+    // Calculate probabilities for test data
+    void calculateProbabilities(vector<Data> &testData, const vector<Data> &trainData, bool isHam) {
+        for (auto &testRecord : testData) {
+            double probability = 0.0;
+            for (const string &testWord : testRecord.words) {
+                int count = 0;
+                for (const auto &trainRecord : trainData) {
+                    if (find(trainRecord.words.begin(), trainRecord.words.end(), testWord) != trainRecord.words.end()) {
+                        count++;
+                    }
+                }
+                count++; // Laplace smoothing
+                probability += log10(count);
+            }
+            if (isHam) {
+                testRecord.ham_probability = probability;
+            } else {
+                testRecord.spam_probability = probability;
             }
         }
-        return processed;
     }
 
-    vector<string> tokenize(const string &text)
-    {
-        vector<string> tokens;
-        istringstream stream(text);
-        string word;
-        while (stream >> word)
-        {
-            tokens.push_back(word);
+    // Calculate final probabilities for spam and ham
+    void calculateFinalProbabilities(vector<Data> &data) {
+        for (auto &record : data) {
+            double spamProb = pow(10, record.spam_probability);
+            double hamProb = pow(10, record.ham_probability);
+            record.probability = spamProb / (spamProb + hamProb);
         }
-        return tokens;
     }
 
-    double calculateProbability(const string &email)
-    {
-        string processed = preprocessString(email);
-        vector<string> words = tokenize(processed);
-
-        double spamScore = log(spamPrior);
-        double hamScore = log(hamPrior);
-
-        for (const string &word : words)
-        {
-            double p_word_spam = (spamWordCount[word] + 1.0) / (totalSpamWords + spamWordCount.size());
-            double p_word_ham = (hamWordCount[word] + 1.0) / (totalHamWords + hamWordCount.size());
-            spamScore += log(p_word_spam);
-            hamScore += log(p_word_ham);
+    // Print results
+    void printResults(const vector<Data> &data, const string &label) {
+        for (size_t i = 0; i < data.size(); i++) {
+            cout << label << "-" << i + 1 << " : " << data[i].probability << endl;
         }
-
-        return exp(spamScore) / (exp(spamScore) + exp(hamScore));
+        cout << "-------------------------------------" << endl;
     }
 
 public:
-    void train(const string &filename, bool isSpam)
-    {
-        ifstream file(filename);
-        if (!file.is_open())
-        {
-            cerr << "Error: Cannot open file " << filename << endl;
-            exit(1);
-        }
+    void run() {
+        // Parse files
+        parseFile(test_ham, testHamData, 20);
+        parseFile(test_spam, testSpamData, 20);
+        parseFile(train_ham, trainHamData, 100);
+        parseFile(train_spam, trainSpamData, 100);
 
-        string line;
-        while (getline(file, line))
-        {
-            string processed = preprocessString(line);
-            vector<string> words = tokenize(processed);
+        // Remove duplicate words
+        removeDuplicateWords(testHamData);
+        removeDuplicateWords(testSpamData);
+        removeDuplicateWords(trainHamData);
+        removeDuplicateWords(trainSpamData);
 
-            for (const string &word : words)
-            {
-                if (isSpam)
-                {
-                    spamWordCount[word]++;
-                    totalSpamWords++;
-                }
-                else
-                {
-                    hamWordCount[word]++;
-                    totalHamWords++;
-                }
-            }
-        }
-        file.close();
-    }
+        // Calculate probabilities
+        calculateProbabilities(testHamData, trainHamData, true);
+        calculateProbabilities(testHamData, trainSpamData, false);
+        calculateProbabilities(testSpamData, trainHamData, true);
+        calculateProbabilities(testSpamData, trainSpamData, false);
 
-    void setPriors(int spamCount, int hamCount)
-    {
-        spamPrior = (double)spamCount / (spamCount + hamCount);
-        hamPrior = (double)hamCount / (spamCount + hamCount);
-    }
+        // Calculate final probabilities
+        calculateFinalProbabilities(testHamData);
+        calculateFinalProbabilities(testSpamData);
 
-    double classifyEmail(const string &email, double threshold)
-    {
-        double probability = calculateProbability(email);
-        return probability >= threshold;
-    }
-
-    double evaluate(const string &testFile, bool isSpam, double threshold)
-    {
-        ifstream file(testFile);
-        if (!file.is_open())
-        {
-            cerr << "Error: Cannot open file " << testFile << endl;
-            exit(1);
-        }
-
-        string line;
-        int totalEmails = 0;
-        int correctPredictions = 0;
-
-        while (getline(file, line))
-        {
-            bool prediction = classifyEmail(line, threshold);
-            if (prediction == isSpam)
-            {
-                correctPredictions++;
-            }
-            totalEmails++;
-        }
-        file.close();
-        
-
-        return (double)correctPredictions / totalEmails * 100.0;
-    }
-
-    void classifyAndEvaluate(const string &spamTestFile, const string &hamTestFile, vector<double> thresholds)
-    {
-        for (double threshold : thresholds)
-        {
-            int correctPredictions = 0;
-
-            cout << "Threshold: " << threshold << "\n";
-            cout << "Classifying Spam Emails:\n";
-
-            // Classify spam emails
-            ifstream spamFile(spamTestFile);
-            string line;
-            int emailIndex = 1;
-            while (getline(spamFile, line))
-            {
-                double probability = calculateProbability(line);
-                bool isSpam = probability >= threshold;
-
-                cout << "Email s" << setw(2) << setfill('0') << emailIndex << ":\n";
-                cout << "  Probability: " << fixed << setprecision(4) << probability << "\n";
-                cout << "  Predicted Label: " << (isSpam ? "Spam" : "Non-spam") << "\n";
-
-                if (isSpam)
-                {
-                    correctPredictions++;
-                }
-
-                emailIndex++;
-            }
-            spamFile.close();
-
-            cout << "\nClassifying Non-Spam Emails:\n";
-
-            // Classify non-spam emails
-            ifstream hamFile(hamTestFile);
-            emailIndex = 1;
-            while (getline(hamFile, line))
-            {
-                double probability = calculateProbability(line);
-                bool isSpam = probability >= threshold;
-
-                cout << "Email h" << setw(2) << setfill('0') << emailIndex << ":\n";
-                cout << "  Probability: " << fixed << setprecision(4) << probability << "\n";
-                cout << "  Predicted Label: " << (isSpam ? "Spam" : "Non-spam") << "\n";
-
-                if (!isSpam)
-                {
-                    correctPredictions++;
-                }
-
-                emailIndex++;
-            }
-            hamFile.close();
-
-            double accuracy = (double)correctPredictions / 40 * 100.0;
-            cout << "Accuracy at Threshold " << threshold << ": " << fixed << setprecision(2) << accuracy << "%\n";
-            cout << "-------------------------------------------\n";
-        }
+        // Print results
+        printResults(testHamData, "ham");
+        printResults(testSpamData, "spam");
     }
 };
 
-int main()
-{
+int main() {
     SpamFilter filter;
-
-    // Train the filter
-    filter.train("dataset_spam_train100.csv", true);
-    filter.train("dataset_ham_train100.csv", false);
-
-    // Set priors based on training data
-    filter.setPriors(100, 100);
-
-    // Thresholds for classification
-    vector<double> thresholds = {0.6, 0.7, 0.8, 0.9, 0.95};
-
-    // Classify and evaluate test data
-    filter.classifyAndEvaluate("dataset_spam_test20.csv", "dataset_ham_test20.csv", thresholds);
-
+    filter.run();
     return 0;
 }
